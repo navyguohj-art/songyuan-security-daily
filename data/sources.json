@@ -1,0 +1,31 @@
+{
+  "stock": {
+    "code": "300893",
+    "secid": "0.300893",
+    "shortName": "松原安全",
+    "fullName": "浙江松原汽车安全系统股份有限公司",
+    "market": "深交所创业板"
+  },
+  "sources": {
+    "announcements": {
+      "name": "东方财富公告接口",
+      "url": "https://np-anotice-stock.eastmoney.com/api/security/ann",
+      "priority": 100
+    },
+    "news": {
+      "name": "东方财富新闻搜索接口",
+      "url": "https://search-api-web.eastmoney.com/search/jsonp",
+      "priority": 70
+    },
+    "quote": {
+      "name": "东方财富行情接口",
+      "url": "https://push2.eastmoney.com/api/qt/stock/get",
+      "priority": 80
+    }
+  },
+  "keywords": {
+    "highImpact": ["可转债", "再融资", "募集说明书", "财报", "年报", "季报", "净利润", "现金流", "减持", "质押", "诉讼", "处罚"],
+    "positive": ["分红", "权益分派", "股权激励", "回购", "市值管理", "受理", "增长"],
+    "risk": ["现金净流入为-", "减持", "质押", "诉讼", "处罚", "问询", "亏损", "下滑", "摊薄"]
+  }
+}

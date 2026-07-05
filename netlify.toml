@@ -1,0 +1,8 @@
+[build]
+  publish = "outputs"
+  command = "python3 scripts/generate_daily_report.py"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Cache-Control = "public, max-age=300"
