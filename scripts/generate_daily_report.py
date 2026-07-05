@@ -19,6 +19,7 @@ INDEX_OUTPUT = ROOT / "outputs" / "index.html"
 SOURCES = ROOT / "data" / "sources.json"
 ANNOUNCEMENT_TEXT_DIR = ROOT / "work" / "announcements"
 MAX_ANNOUNCEMENTS_WITH_FULLTEXT = 30
+BEIJING_TZ = dt.timezone(dt.timedelta(hours=8))
 
 
 def fetch_json(url: str, params: dict[str, str]) -> dict:
@@ -489,8 +490,9 @@ def collect_quote(config: dict) -> dict:
 
 
 def render(config: dict, quote: dict, records: list[dict]) -> str:
-    today = dt.datetime.now().strftime("%Y-%m-%d")
-    now = dt.datetime.now().strftime("%Y-%m-%d %H:%M")
+    generated_at = dt.datetime.now(BEIJING_TZ)
+    today = generated_at.strftime("%Y-%m-%d")
+    now = generated_at.strftime("%Y-%m-%d %H:%M")
     records_json = json.dumps(records, ensure_ascii=False)
     def fmt(value: float | None, unit: str = "") -> str:
         if value is None:
@@ -511,6 +513,8 @@ def render(config: dict, quote: dict, records: list[dict]) -> str:
     .wrap {{ max-width: 1180px; margin: 0 auto; }}
     h1 {{ margin: 0 0 8px; font-size: 30px; }}
     .sub {{ color: #cbd5e1; line-height: 1.6; }}
+    .update-badge {{ display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; padding: 9px 12px; border-radius: 7px; background: #dcfce7; color: #0f6b3d; font-weight: 700; }}
+    .update-dot {{ width: 8px; height: 8px; border-radius: 50%; background: #16a34a; }}
     main {{ padding: 20px; }}
     .grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: -34px; }}
     .card, .panel, article {{ background: white; border: 1px solid #d9dee8; border-radius: 8px; box-shadow: 0 10px 30px rgba(24,32,54,.08); }}
@@ -542,7 +546,7 @@ def render(config: dict, quote: dict, records: list[dict]) -> str:
   </style>
 </head>
 <body>
-  <header><div class="wrap"><h1>{config['stock']['shortName']} {config['stock']['code']} 每日信息看板</h1><div class="sub">{config['stock']['fullName']} | 更新：{now} | 非投资建议</div></div></header>
+  <header><div class="wrap"><h1>{config['stock']['shortName']} {config['stock']['code']} 每日信息看板</h1><div class="sub">{config['stock']['fullName']} | 北京时间 | 非投资建议</div><div class="update-badge"><span class="update-dot"></span>今日已更新：{now}</div></div></header>
   <main><div class="wrap">
     <section class="grid">
       <div class="card"><label>最新价</label><strong>{fmt(quote['price'], " 元")}</strong><p class="{change_class}">涨跌幅 {fmt(quote['change'], "%")}</p></div>
