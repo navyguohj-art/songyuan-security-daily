@@ -526,6 +526,8 @@ def render(config: dict, quote: dict, records: list[dict]) -> str:
     .controls {{ display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }}
     button, select {{ min-height: 38px; border: 1px solid #d9dee8; background: white; border-radius: 7px; padding: 0 10px; cursor: pointer; }}
     button.active {{ background: #275efe; color: white; }}
+    .notice {{ margin: 0 0 12px; padding: 10px 12px; border: 1px solid #d9dee8; border-radius: 7px; background: #f8fafc; color: #344054; line-height: 1.6; }}
+    .notice.has-today {{ border-color: #bbf7d0; background: #f0fdf4; color: #0f8a52; font-weight: 700; }}
     #items {{ display: grid; gap: 12px; }}
     article {{ padding: 16px; box-shadow: none; }}
     article.today {{ border-color: #37b26c; background: #f3fbf6; }}
@@ -556,20 +558,34 @@ def render(config: dict, quote: dict, records: list[dict]) -> str:
     </section>
     <section class="layout">
       <aside class="panel"><h2>跟踪重点</h2><p>优先关注再融资审核进度、募投项目回报、经营现金流、毛利率、客户订单和回款节奏。公告权威性高于新闻，概念行情仅作情绪参考。</p><h2>风险预判</h2><p>若出现现金流持续为负、再融资问询集中于募投合理性、主要客户需求不及预期或行业价格竞争加剧，应提高风险权重。</p></aside>
-      <section class="panel"><div class="controls"><button class="active" data-filter="all">全部</button><button data-filter="公告">公告</button><button data-filter="新闻">新闻</button><button data-filter="高影响">高影响</button><button data-filter="风险">风险</button><button data-filter="利好">利好</button><select id="sorter"><option value="priority">按投资影响排序</option><option value="date">按时间倒序</option><option value="authority">按权威性排序</option></select></div><div id="items"></div></section>
+      <section class="panel"><div class="controls"><button class="active" data-filter="all">全部</button><button data-filter="公告">公告</button><button data-filter="新闻">新闻</button><button data-filter="高影响">高影响</button><button data-filter="风险">风险</button><button data-filter="利好">利好</button><select id="sorter"><option value="priority">新增优先，按影响排序</option><option value="date">新增优先，按时间排序</option><option value="authority">新增优先，按权威性排序</option></select></div><div id="dailyNotice"></div><div id="items"></div></section>
     </section>
   </div></main>
   <script>
     const records = {records_json};
     const reportDate = "{today}";
+    const dailyNoticeEl = document.querySelector("#dailyNotice");
     const itemsEl = document.querySelector("#items");
     const buttons = [...document.querySelectorAll("button[data-filter]")];
     const sorter = document.querySelector("#sorter");
     let activeFilter = "all";
+    function isTodayRecord(i) {{
+      return (i.date || "").slice(0, 10) === reportDate;
+    }}
+    function compareRecords(a, b) {{
+      const todayDiff = Number(isTodayRecord(b)) - Number(isTodayRecord(a));
+      if (todayDiff !== 0) return todayDiff;
+      if (sorter.value === "date") return new Date(b.date.replace(" ","T")) - new Date(a.date.replace(" ","T"));
+      if (sorter.value === "authority") return b.authority - a.authority || b.impact - a.impact;
+      return b.impact - a.impact || b.authority - a.authority;
+    }}
     function render() {{
-      const shown = records.filter(i => activeFilter === "all" || i.type === activeFilter || i.tags.includes(activeFilter)).sort((a,b) => sorter.value === "date" ? new Date(b.date.replace(" ","T")) - new Date(a.date.replace(" ","T")) : sorter.value === "authority" ? b.authority - a.authority : b.impact - a.impact);
+      const shown = records.filter(i => activeFilter === "all" || i.type === activeFilter || i.tags.includes(activeFilter)).sort(compareRecords);
+      const todayCount = shown.filter(isTodayRecord).length;
+      dailyNoticeEl.className = todayCount ? "notice has-today" : "notice";
+      dailyNoticeEl.textContent = todayCount ? `今日新增 ${{todayCount}} 条，已按影响度优先展示。` : "今日暂无新增公告或新闻。";
       itemsEl.innerHTML = shown.map(i => {{
-        const isToday = (i.date || "").slice(0, 10) === reportDate;
+        const isToday = isTodayRecord(i);
         const keyPoints = i.keyPoints && i.keyPoints.length ? `<div class="keypoints"><b>原文关键点</b><ul>${{i.keyPoints.map(p => `<li>${{p}}</li>`).join("")}}</ul></div>` : `<p>${{i.summary}}</p>`;
         const todayTag = isToday ? `<span class="tag today-tag">今日新增</span>` : "";
         return `<article class="${{isToday ? "today" : ""}}"><h3><a href="${{i.url}}" target="_blank" rel="noopener noreferrer">${{i.title}}</a></h3>${{keyPoints}}<p><b>投资解读：</b>${{i.analysis}}</p><div class="meta">${{todayTag}}<span class="tag">${{i.date}}</span><span class="tag">${{i.source}}</span>${{i.tags.map(t => `<span class="tag">${{t}}</span>`).join("")}}<span class="tag">影响分 ${{i.impact}}</span></div></article>`;
