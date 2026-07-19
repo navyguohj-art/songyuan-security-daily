@@ -4,7 +4,8 @@
     "secid": "0.300893",
     "shortName": "松原安全",
     "fullName": "浙江松原汽车安全系统股份有限公司",
-    "market": "深交所创业板"
+    "market": "深交所创业板",
+    "listingDate": "2020-09-24"
   },
   "sources": {
     "announcements": {
@@ -20,6 +21,12 @@
     "quote": {
       "name": "东方财富行情接口",
       "url": "https://push2.eastmoney.com/api/qt/stock/get",
+      "priority": 80
+    },
+    "valuation": {
+      "name": "东方财富估值分析",
+      "url": "https://datacenter-web.eastmoney.com/api/data/v1/get",
+      "reportName": "RPT_VALUEANALYSIS_DET",
       "priority": 80
     }
   },

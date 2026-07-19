@@ -17,6 +17,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "outputs" / "songyuan_security_daily.html"
 INDEX_OUTPUT = ROOT / "outputs" / "index.html"
 SOURCES = ROOT / "data" / "sources.json"
+PE_HISTORY = ROOT / "data" / "pe_history.json"
 ANNOUNCEMENT_TEXT_DIR = ROOT / "work" / "announcements"
 MAX_ANNOUNCEMENTS_WITH_FULLTEXT = 30
 BEIJING_TZ = dt.timezone(dt.timedelta(hours=8))
@@ -489,11 +490,95 @@ def collect_quote(config: dict) -> dict:
     }
 
 
-def render(config: dict, quote: dict, records: list[dict]) -> str:
+def load_pe_history() -> list[dict]:
+    if not PE_HISTORY.exists():
+        return []
+    try:
+        payload = json.loads(PE_HISTORY.read_text(encoding="utf-8"))
+        records = payload.get("records", [])
+        return [row for row in records if row.get("date")]
+    except (OSError, json.JSONDecodeError, AttributeError) as exc:
+        print(f"Stored PE history could not be read, rebuilding it: {exc}")
+        return []
+
+
+def collect_pe_history(config: dict) -> list[dict]:
+    """Backfill PE(TTM) since listing, then refresh only the latest dates."""
+    existing = load_pe_history()
+    stock = config["stock"]
+    start_date = existing[-1]["date"] if existing else stock["listingDate"]
+    valuation_source = config["sources"]["valuation"]
+    api_filter = f'(SECURITY_CODE="{stock["code"]}")(TRADE_DATE>=\'{start_date}\')'
+    fetched: list[dict] = []
+
+    try:
+        page_number = 1
+        page_count = 1
+        while page_number <= page_count:
+            response = fetch_json(
+                valuation_source["url"],
+                {
+                    "reportName": valuation_source["reportName"],
+                    "columns": "ALL",
+                    "filter": api_filter,
+                    "pageNumber": str(page_number),
+                    "pageSize": "500",
+                    "sortTypes": "1",
+                    "sortColumns": "TRADE_DATE",
+                    "source": "WEB",
+                    "client": "WEB",
+                },
+            )
+            if not response.get("success"):
+                raise RuntimeError(response.get("message") or "valuation API returned no success flag")
+            result = response.get("result") or {}
+            page_count = int(result.get("pages") or 0)
+            fetched.extend(result.get("data") or [])
+            page_number += 1
+    except Exception as exc:
+        print(f"PE history update failed, using {len(existing)} stored records: {exc}")
+        return existing
+
+    normalized: list[dict] = []
+    for row in fetched:
+        trade_date = (row.get("TRADE_DATE") or "")[:10]
+        if not trade_date:
+            continue
+        normalized.append(
+            {
+                "date": trade_date,
+                "peTtm": to_float(row.get("PE_TTM")),
+                "peLatest": to_float(row.get("PE_LAR")),
+                "pb": to_float(row.get("PB_MRQ")),
+                "close": to_float(row.get("CLOSE_PRICE")),
+                "marketCap": to_float(row.get("TOTAL_MARKET_CAP"), 100000000),
+                "changeRate": to_float(row.get("CHANGE_RATE")),
+            }
+        )
+
+    merged = {row["date"]: row for row in existing}
+    merged.update({row["date"]: row for row in normalized})
+    history = [merged[date] for date in sorted(merged)]
+    if history:
+        payload = {
+            "stockCode": stock["code"],
+            "metric": "PE_TTM",
+            "source": valuation_source["name"],
+            "listingDate": stock["listingDate"],
+            "updatedAt": dt.datetime.now(BEIJING_TZ).isoformat(timespec="seconds"),
+            "records": history,
+        }
+        PE_HISTORY.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        print(f"Updated PE history: {len(history)} trading days through {history[-1]['date']}")
+    return history
+
+
+def render(config: dict, quote: dict, records: list[dict], pe_history: list[dict]) -> str:
     generated_at = dt.datetime.now(BEIJING_TZ)
     today = generated_at.strftime("%Y-%m-%d")
     now = generated_at.strftime("%Y-%m-%d %H:%M")
     records_json = json.dumps(records, ensure_ascii=False)
+    pe_history_json = json.dumps(pe_history, ensure_ascii=False, separators=(",", ":"))
     def fmt(value: float | None, unit: str = "") -> str:
         if value is None:
             return "暂无"
@@ -521,6 +606,32 @@ def render(config: dict, quote: dict, records: list[dict]) -> str:
     .card {{ padding: 16px; min-height: 106px; }}
     .card label {{ display: block; color: #667085; font-size: 12px; margin-bottom: 8px; }}
     .card strong {{ font-size: 24px; }}
+    .valuation {{ margin-top: 16px; }}
+    .section-head {{ display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; margin-bottom: 14px; }}
+    .section-head h2 {{ margin: 0 0 5px; }}
+    .section-head p {{ margin: 0; color: #667085; line-height: 1.55; }}
+    .range-controls {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px; border: 1px solid #e5e9f2; border-radius: 8px; background: #f8fafc; }}
+    .range-controls .custom-range {{ display: flex; align-items: center; gap: 7px; margin-left: auto; }}
+    input[type="date"] {{ min-height: 36px; box-sizing: border-box; border: 1px solid #d9dee8; border-radius: 7px; background: #fff; padding: 0 8px; color: #172033; }}
+    .pe-stats {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin: 14px 0; }}
+    .pe-stat {{ padding: 12px; border: 1px solid #e5e9f2; border-radius: 8px; background: #fff; }}
+    .pe-stat span {{ display: block; color: #667085; font-size: 12px; margin-bottom: 5px; }}
+    .pe-stat strong {{ font-size: 20px; font-variant-numeric: tabular-nums; }}
+    .chart-wrap {{ position: relative; width: 100%; min-height: 360px; border-top: 1px solid #eef1f5; border-bottom: 1px solid #eef1f5; }}
+    #peChart {{ display: block; width: 100%; height: 360px; touch-action: pan-y; }}
+    .chart-tooltip {{ position: absolute; z-index: 3; display: none; min-width: 128px; pointer-events: none; transform: translate(-50%, -100%); padding: 9px 10px; border-radius: 7px; background: #111827; color: #fff; font-size: 12px; line-height: 1.55; box-shadow: 0 8px 24px rgba(17,24,39,.2); }}
+    .chart-legend {{ display: flex; flex-wrap: wrap; gap: 16px; margin-top: 10px; color: #667085; font-size: 12px; }}
+    .legend-key {{ display: inline-flex; align-items: center; gap: 6px; }}
+    .legend-line {{ width: 22px; border-top: 2px solid #275efe; }}
+    .legend-line.median {{ border-top: 1px dashed #667085; }}
+    .pe-note {{ color: #667085; font-size: 12px; line-height: 1.6; }}
+    details {{ margin-top: 14px; border-top: 1px solid #eef1f5; padding-top: 12px; }}
+    summary {{ cursor: pointer; color: #275efe; font-weight: 700; }}
+    .table-wrap {{ max-height: 430px; overflow: auto; margin-top: 10px; border: 1px solid #e5e9f2; border-radius: 8px; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }}
+    th, td {{ padding: 9px 12px; text-align: right; border-bottom: 1px solid #eef1f5; white-space: nowrap; }}
+    th:first-child, td:first-child {{ text-align: left; }}
+    th {{ position: sticky; top: 0; z-index: 1; background: #f8fafc; color: #475467; }}
     .layout {{ display: grid; grid-template-columns: 300px 1fr; gap: 16px; margin-top: 16px; align-items: start; }}
     .panel {{ padding: 16px; }}
     .controls {{ display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }}
@@ -543,8 +654,8 @@ def render(config: dict, quote: dict, records: list[dict]) -> str:
     .tag {{ border-radius: 999px; padding: 4px 8px; background: #eef2f7; }}
     .tag.today-tag {{ background: #dcfce7; color: #0f8a52; font-weight: 700; }}
     .red {{ color: #c7352e; }} .green {{ color: #0f8a52; }} .amber {{ color: #b7791f; }}
-    @media (max-width: 900px) {{ .grid {{ grid-template-columns: repeat(2, 1fr); }} .layout {{ grid-template-columns: 1fr; }} }}
-    @media (max-width: 560px) {{ .grid {{ grid-template-columns: 1fr; margin-top: -20px; }} h1 {{ font-size: 24px; }} }}
+    @media (max-width: 900px) {{ .grid {{ grid-template-columns: repeat(2, 1fr); }} .layout {{ grid-template-columns: 1fr; }} .pe-stats {{ grid-template-columns: repeat(3, 1fr); }} .range-controls .custom-range {{ width: 100%; margin-left: 0; }} }}
+    @media (max-width: 560px) {{ .grid {{ grid-template-columns: 1fr; margin-top: -20px; }} h1 {{ font-size: 24px; }} main {{ padding: 14px; }} .section-head {{ display: block; }} .pe-stats {{ grid-template-columns: repeat(2, 1fr); }} .range-controls .custom-range {{ align-items: stretch; flex-direction: column; }} #peChart {{ height: 300px; }} .chart-wrap {{ min-height: 300px; }} }}
   </style>
 </head>
 <body>
@@ -554,7 +665,25 @@ def render(config: dict, quote: dict, records: list[dict]) -> str:
       <div class="card"><label>最新价</label><strong>{fmt(quote['price'], " 元")}</strong><p class="{change_class}">涨跌幅 {fmt(quote['change'], "%")}</p></div>
       <div class="card"><label>成交</label><strong>{fmt(quote['amount'], " 万元")}</strong><p>换手约 {fmt(quote['turnover'], "%")} | {quote_source}</p></div>
       <div class="card"><label>市值</label><strong>{fmt(quote['marketCap'], " 亿元")}</strong><p>流通市值 {fmt(quote['floatCap'], " 亿元")}</p></div>
-      <div class="card"><label>估值</label><strong>PE {fmt(quote['pe'])}</strong><p>PB {fmt(quote['pb'])}</p></div>
+      <div class="card"><label>估值</label><strong>PE(TTM) {fmt(quote['pe'])}</strong><p>PB {fmt(quote['pb'])}</p></div>
+    </section>
+    <section class="panel valuation" aria-labelledby="peTitle">
+      <div class="section-head"><div><h2 id="peTitle">历史市盈率（PE-TTM）</h2><p>完整覆盖上市以来的交易日估值，并随每日看板持续更新。</p></div><div class="pe-note" id="peRangeMeta"></div></div>
+      <div class="range-controls" aria-label="市盈率时间段选择器">
+        <button data-pe-range="1m">近1月</button><button data-pe-range="3m">近3月</button><button data-pe-range="6m">近6月</button><button data-pe-range="1y">近1年</button><button data-pe-range="3y">近3年</button><button class="active" data-pe-range="all">上市以来</button>
+        <div class="custom-range"><label for="peStart">自定义</label><input id="peStart" type="date" aria-label="市盈率开始日期"><span>至</span><input id="peEnd" type="date" aria-label="市盈率结束日期"><button id="applyPeRange">应用</button></div>
+      </div>
+      <div class="pe-stats">
+        <div class="pe-stat"><span>区间最新</span><strong id="peLatest">—</strong></div>
+        <div class="pe-stat"><span>区间中位数</span><strong id="peMedian">—</strong></div>
+        <div class="pe-stat"><span>区间最低</span><strong id="peMin">—</strong></div>
+        <div class="pe-stat"><span>区间最高</span><strong id="peMax">—</strong></div>
+        <div class="pe-stat"><span>最新所处分位</span><strong id="pePercentile">—</strong></div>
+      </div>
+      <div class="chart-wrap" id="peChartWrap"><canvas id="peChart" role="img" aria-label="松原安全历史市盈率折线图">您的浏览器不支持画布，请展开下方历史明细查看全部数据。</canvas><div class="chart-tooltip" id="peTooltip"></div></div>
+      <div class="chart-legend"><span class="legend-key"><span class="legend-line"></span>每日 PE(TTM)</span><span class="legend-key"><span class="legend-line median"></span>所选区间中位数</span></div>
+      <p class="pe-note">数据源：东方财富估值分析。PE(TTM) 按最近十二个月归母净利润计算；分位仅反映所选区间内的历史位置，不代表估值建议。</p>
+      <details id="peDetails"><summary id="peDetailsSummary">查看所选区间每日明细</summary><div class="table-wrap"><table><thead><tr><th>交易日</th><th>PE(TTM)</th><th>收盘价（元）</th><th>PB</th><th>总市值（亿元）</th></tr></thead><tbody id="peTableBody"></tbody></table></div></details>
     </section>
     <section class="layout">
       <aside class="panel"><h2>跟踪重点</h2><p>优先关注再融资审核进度、募投项目回报、经营现金流、毛利率、客户订单和回款节奏。公告权威性高于新闻，概念行情仅作情绪参考。</p><h2>风险预判</h2><p>若出现现金流持续为负、再融资问询集中于募投合理性、主要客户需求不及预期或行业价格竞争加剧，应提高风险权重。</p></aside>
@@ -563,12 +692,22 @@ def render(config: dict, quote: dict, records: list[dict]) -> str:
   </div></main>
   <script>
     const records = {records_json};
+    const peHistory = {pe_history_json};
     const reportDate = "{today}";
     const dailyNoticeEl = document.querySelector("#dailyNotice");
     const itemsEl = document.querySelector("#items");
     const buttons = [...document.querySelectorAll("button[data-filter]")];
     const sorter = document.querySelector("#sorter");
+    const peCanvas = document.querySelector("#peChart");
+    const peChartWrap = document.querySelector("#peChartWrap");
+    const peTooltip = document.querySelector("#peTooltip");
+    const peRangeButtons = [...document.querySelectorAll("button[data-pe-range]")];
+    const peStart = document.querySelector("#peStart");
+    const peEnd = document.querySelector("#peEnd");
+    const peDetails = document.querySelector("#peDetails");
     let activeFilter = "all";
+    let selectedPeRows = peHistory;
+    let peChartGeometry = null;
     function isTodayRecord(i) {{
       return (i.date || "").slice(0, 10) === reportDate;
     }}
@@ -593,7 +732,113 @@ def render(config: dict, quote: dict, records: list[dict]) -> str:
     }}
     buttons.forEach(b => b.onclick = () => {{ buttons.forEach(x => x.classList.remove("active")); b.classList.add("active"); activeFilter = b.dataset.filter; render(); }});
     sorter.onchange = render;
+
+    function numberOrDash(value, digits = 2) {{
+      return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
+    }}
+    function median(values) {{
+      const sorted = [...values].sort((a, b) => a - b);
+      const middle = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+    }}
+    function dateLabel(date) {{ return date ? date.slice(0, 10) : "—"; }}
+    function rowsForRange(range) {{
+      if (!peHistory.length || range === "all") return peHistory;
+      const latest = new Date(`${{peHistory[peHistory.length - 1].date}}T00:00:00`);
+      const cutoff = new Date(latest);
+      const offsets = {{"1m": ["month", 1], "3m": ["month", 3], "6m": ["month", 6], "1y": ["year", 1], "3y": ["year", 3]}};
+      const [unit, amount] = offsets[range];
+      if (unit === "month") cutoff.setMonth(cutoff.getMonth() - amount);
+      if (unit === "year") cutoff.setFullYear(cutoff.getFullYear() - amount);
+      return peHistory.filter(row => new Date(`${{row.date}}T00:00:00`) >= cutoff);
+    }}
+    function renderPeTable(rows) {{
+      document.querySelector("#peDetailsSummary").textContent = `查看所选区间每日明细（${{rows.length.toLocaleString("zh-CN")}} 条）`;
+      if (!peDetails.open) return;
+      document.querySelector("#peTableBody").innerHTML = [...rows].reverse().map(row => `<tr><td>${{row.date}}</td><td>${{numberOrDash(row.peTtm)}}</td><td>${{numberOrDash(row.close)}}</td><td>${{numberOrDash(row.pb)}}</td><td>${{numberOrDash(row.marketCap)}}</td></tr>`).join("");
+    }}
+    function drawPeChart(rows) {{
+      const ctx = peCanvas.getContext("2d");
+      const width = peChartWrap.clientWidth;
+      const height = window.innerWidth <= 560 ? 300 : 360;
+      const dpr = window.devicePixelRatio || 1;
+      peCanvas.width = Math.round(width * dpr);
+      peCanvas.height = Math.round(height * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      const chartRows = rows.filter(row => Number.isFinite(Number(row.peTtm)));
+      if (!chartRows.length) {{
+        ctx.fillStyle = "#667085"; ctx.font = "14px sans-serif"; ctx.fillText("所选区间暂无有效市盈率数据", 20, 40); peChartGeometry = null; return;
+      }}
+      const left = width < 600 ? 48 : 60, right = 18, top = 24, bottom = 42;
+      const plotWidth = Math.max(1, width - left - right), plotHeight = height - top - bottom;
+      const values = chartRows.map(row => Number(row.peTtm));
+      const rawMin = Math.min(...values), rawMax = Math.max(...values);
+      const spread = Math.max(rawMax - rawMin, Math.abs(rawMax) * .08, 1);
+      const yMin = rawMin - spread * .12, yMax = rawMax + spread * .12;
+      const firstTime = Date.parse(`${{chartRows[0].date}}T00:00:00`), lastTime = Date.parse(`${{chartRows[chartRows.length - 1].date}}T00:00:00`);
+      const timeSpan = Math.max(86400000, lastTime - firstTime);
+      const x = row => firstTime === lastTime ? left + plotWidth / 2 : left + ((Date.parse(`${{row.date}}T00:00:00`) - firstTime) / timeSpan) * plotWidth;
+      const y = value => top + ((yMax - value) / (yMax - yMin)) * plotHeight;
+      ctx.font = "11px -apple-system, BlinkMacSystemFont, sans-serif";
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 4; i++) {{
+        const value = yMax - (i / 4) * (yMax - yMin), py = top + (i / 4) * plotHeight;
+        ctx.strokeStyle = "#e5e9f2"; ctx.beginPath(); ctx.moveTo(left, py); ctx.lineTo(width - right, py); ctx.stroke();
+        ctx.fillStyle = "#667085"; ctx.textAlign = "right"; ctx.textBaseline = "middle"; ctx.fillText(value.toFixed(1), left - 8, py);
+      }}
+      for (let i = 0; i <= 3; i++) {{
+        const index = Math.round((chartRows.length - 1) * i / 3), px = x(chartRows[index]);
+        ctx.fillStyle = "#667085"; ctx.textAlign = i === 0 ? "left" : (i === 3 ? "right" : "center"); ctx.textBaseline = "top"; ctx.fillText(chartRows[index].date.slice(0, 7), px, height - bottom + 12);
+      }}
+      const mid = median(values);
+      ctx.save(); ctx.setLineDash([5, 5]); ctx.strokeStyle = "#667085"; ctx.beginPath(); ctx.moveTo(left, y(mid)); ctx.lineTo(width - right, y(mid)); ctx.stroke(); ctx.restore();
+      ctx.strokeStyle = "#275efe"; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.beginPath();
+      chartRows.forEach((row, index) => {{ const px = x(row), py = y(Number(row.peTtm)); if (index === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); }}); ctx.stroke();
+      const last = chartRows[chartRows.length - 1]; ctx.fillStyle = "#fff"; ctx.strokeStyle = "#275efe"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(x(last), y(Number(last.peTtm)), 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      peChartGeometry = {{rows: chartRows, x, y, left, right, top, bottom, width, height}};
+    }}
+    function updatePeView(rows) {{
+      selectedPeRows = rows;
+      const valid = rows.filter(row => Number.isFinite(Number(row.peTtm)));
+      const values = valid.map(row => Number(row.peTtm));
+      const latest = valid[valid.length - 1];
+      document.querySelector("#peLatest").textContent = latest ? `${{numberOrDash(latest.peTtm)}} 倍` : "—";
+      document.querySelector("#peMedian").textContent = values.length ? `${{median(values).toFixed(2)}} 倍` : "—";
+      document.querySelector("#peMin").textContent = values.length ? `${{Math.min(...values).toFixed(2)}} 倍` : "—";
+      document.querySelector("#peMax").textContent = values.length ? `${{Math.max(...values).toFixed(2)}} 倍` : "—";
+      const percentile = latest ? values.filter(value => value <= Number(latest.peTtm)).length / values.length * 100 : null;
+      document.querySelector("#pePercentile").textContent = percentile === null ? "—" : `${{percentile.toFixed(1)}}%`;
+      document.querySelector("#peRangeMeta").textContent = rows.length ? `${{rows[0].date}} 至 ${{rows[rows.length - 1].date}} · ${{rows.length.toLocaleString("zh-CN")}} 个交易日` : "暂无历史记录";
+      drawPeChart(rows); renderPeTable(rows);
+    }}
+    peRangeButtons.forEach(button => button.onclick = () => {{
+      peRangeButtons.forEach(item => item.classList.remove("active")); button.classList.add("active"); updatePeView(rowsForRange(button.dataset.peRange));
+    }});
+    document.querySelector("#applyPeRange").onclick = () => {{
+      const start = peStart.value || peHistory[0]?.date, end = peEnd.value || peHistory[peHistory.length - 1]?.date;
+      if (!start || !end) return;
+      peRangeButtons.forEach(item => item.classList.remove("active"));
+      updatePeView(peHistory.filter(row => row.date >= start && row.date <= end));
+    }};
+    peDetails.addEventListener("toggle", () => renderPeTable(selectedPeRows));
+    peChartWrap.addEventListener("pointermove", event => {{
+      if (!peChartGeometry) return;
+      const rect = peCanvas.getBoundingClientRect(), pointerX = event.clientX - rect.left;
+      let nearest = peChartGeometry.rows[0], nearestDistance = Infinity;
+      for (const row of peChartGeometry.rows) {{ const distance = Math.abs(peChartGeometry.x(row) - pointerX); if (distance < nearestDistance) {{ nearest = row; nearestDistance = distance; }} }}
+      const px = peChartGeometry.x(nearest), py = peChartGeometry.y(Number(nearest.peTtm));
+      peTooltip.innerHTML = `<b>${{nearest.date}}</b><br>PE(TTM)：${{numberOrDash(nearest.peTtm)}} 倍<br>收盘价：${{numberOrDash(nearest.close)}} 元`;
+      peTooltip.style.display = "block"; peTooltip.style.left = `${{Math.max(72, Math.min(peChartGeometry.width - 72, px))}}px`; peTooltip.style.top = `${{Math.max(72, py - 8)}}px`;
+    }});
+    peChartWrap.addEventListener("pointerleave", () => peTooltip.style.display = "none");
+    if (peHistory.length) {{
+      peStart.min = peStart.value = peHistory[0].date; peStart.max = peHistory[peHistory.length - 1].date;
+      peEnd.min = peHistory[0].date; peEnd.max = peEnd.value = peHistory[peHistory.length - 1].date;
+    }}
+    new ResizeObserver(() => drawPeChart(selectedPeRows)).observe(peChartWrap);
     render();
+    updatePeView(peHistory);
   </script>
 </body>
 </html>"""
@@ -603,8 +848,11 @@ def main() -> None:
     config = json.loads(SOURCES.read_text(encoding="utf-8"))
     records = collect_records(config)
     quote = collect_quote(config)
+    pe_history = collect_pe_history(config)
+    if pe_history:
+        quote["pe"] = pe_history[-1].get("peTtm")
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    html_text = render(config, quote, records)
+    html_text = render(config, quote, records, pe_history)
     OUTPUT.write_text(html_text, encoding="utf-8")
     INDEX_OUTPUT.write_text(html_text, encoding="utf-8")
     print(f"Wrote {OUTPUT}")

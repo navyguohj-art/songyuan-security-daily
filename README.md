@@ -8,6 +8,7 @@
 
 - `outputs/index.html`：Netlify 站点首页。
 - `outputs/songyuan_security_daily.html`：每日信息汇总看板，可直接用浏览器打开。
+- `data/pe_history.json`：自 2020-09-24 上市以来的每日 PE(TTM) 历史记录。
 - `data/sources.json`：股票代码、公司名称和公开数据源配置。
 - `scripts/generate_daily_report.py`：每日看板生成脚本。公告原文关键点提取会使用 `pypdf`；在 Codex bundled Python 中已可用。
 
@@ -26,6 +27,8 @@ GitHub Actions 会在每天北京时间 08:30 自动运行生成脚本。对应 
 ```
 
 如果 Netlify 已连接该 GitHub 仓库，每次 GitHub Actions 提交更新后，Netlify 会自动重新部署。
+
+生成脚本会在首次运行时补齐上市以来的全部市盈率记录；后续运行从本地最新交易日开始增量拉取，更新 `data/pe_history.json`，并将完整历史嵌入网页。网页支持近 1 月、3 月、6 月、1 年、3 年、上市以来及自定义日期范围查看。
 
 也可以手动运行：
 
