@@ -2,3 +2,10 @@
 __pycache__/
 *.py[cod]
 .venv/
+.env
+.env.*
+node_modules/
+.pnpm-store/
+dist/
+.next/
+.wrangler/

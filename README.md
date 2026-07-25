@@ -49,14 +49,32 @@ outputs/index.html
 outputs/songyuan_security_daily.html
 ```
 
-## Netlify 部署
+## Codex Sites 部署
+
+站点通过 Codex Sites 私有发布。Sites 构建会把
+`outputs/index.html` 原样封装进 Cloudflare Worker，因此不会改变看板的
+HTML、内容采集逻辑或视觉样式。
+
+每天北京时间 08:30，GitHub Actions 生成并提交报告；Codex 本地自动任务
+随后同步最新的 `main` 分支、验证构建并发布新的公开 Sites 版本。Sites
+项目标识记录在 `.openai/hosting.json`，其中不存放密钥。
+
+公开发布成功后，本地自动任务会调用
+`scripts/send_sites_notification.py`，通过用户现有的 QQ SMTP 本地配置向
+发件账号本人发送最新站点链接。SMTP 授权码只从现有本地配置位置在运行时
+读取，不复制到本仓库、GitHub Secrets 或 Sites 环境变量中；因此这台 Mac
+需要在自动任务执行时保持在线。
+
+## Netlify 回退部署
 
 本项目已包含 `netlify.toml`：
 
 - Publish directory: `outputs`
 - Build command: `python3 scripts/generate_daily_report.py`
 
-推荐流程：
+旧的 Netlify 配置暂时保留作为迁移回退，不影响 Codex Sites 发布。
+
+原 Netlify 流程：
 
 1. 将项目推送到 GitHub 仓库。
 2. 在 Netlify 中选择 `Add new site` -> `Import an existing project`。
