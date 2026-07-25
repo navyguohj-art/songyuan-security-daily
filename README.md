@@ -6,7 +6,7 @@
 
 ## 当前产物
 
-- `outputs/index.html`：Netlify 站点首页。
+- `outputs/index.html`：GitHub Pages 站点首页。
 - `outputs/songyuan_security_daily.html`：每日信息汇总看板，可直接用浏览器打开。
 - `data/pe_history.json`：自 2020-09-24 上市以来的每日 PE(TTM) 历史记录。
 - `data/sources.json`：股票代码、公司名称和公开数据源配置。
@@ -26,7 +26,9 @@ GitHub Actions 会在每天北京时间 08:30 自动运行生成脚本。对应 
 30 0 * * *
 ```
 
-如果 Netlify 已连接该 GitHub 仓库，每次 GitHub Actions 提交更新后，Netlify 会自动重新部署。
+同一工作流会在生成并提交报告后，把 `outputs` 原样发布到 GitHub Pages；
+发布成功后，再通过 QQ SMTP 向发件账号本人发送最新公开链接。整条链路运行在
+GitHub 云端，电脑关机或休眠不影响执行。
 
 生成脚本会在首次运行时补齐上市以来的全部市盈率记录；后续运行从本地最新交易日开始增量拉取，更新 `data/pe_history.json`，并将完整历史嵌入网页。网页支持近 1 月、3 月、6 月、1 年、3 年、上市以来及自定义日期范围查看。
 
@@ -49,21 +51,18 @@ outputs/index.html
 outputs/songyuan_security_daily.html
 ```
 
-## Codex Sites 部署
+## GitHub Pages 与 QQ 邮件
 
-站点通过 Codex Sites 私有发布。Sites 构建会把
-`outputs/index.html` 原样封装进 Cloudflare Worker，因此不会改变看板的
-HTML、内容采集逻辑或视觉样式。
+GitHub Pages 直接发布 `outputs` 目录，不会改变看板 HTML、内容采集逻辑或
+视觉样式。仓库 Settings → Pages 中的 Source 需要选择 **GitHub Actions**。
 
-每天北京时间 08:30，GitHub Actions 生成并提交报告；Codex 本地自动任务
-随后同步最新的 `main` 分支、验证构建并发布新的公开 Sites 版本。Sites
-项目标识记录在 `.openai/hosting.json`，其中不存放密钥。
+QQ 邮件通知使用两个 Repository secrets：
 
-公开发布成功后，本地自动任务会调用
-`scripts/send_sites_notification.py`，通过用户现有的 QQ SMTP 本地配置向
-发件账号本人发送最新站点链接。SMTP 授权码只从现有本地配置位置在运行时
-读取，不复制到本仓库、GitHub Secrets 或 Sites 环境变量中；因此这台 Mac
-需要在自动任务执行时保持在线。
+- `QQ_SMTP_USER`：QQ 发件邮箱账号；通知会发送给该账号本人。
+- `QQ_SMTP_AUTH_CODE`：QQ 邮箱为 SMTP 生成的授权码，不是邮箱登录密码。
+
+授权码只由 GitHub Actions 在运行时读取，不写入代码、日志或仓库。若 secrets
+尚未配置，报告生成与 Pages 发布仍会正常完成，只跳过邮件通知。
 
 ## Netlify 回退部署
 
@@ -72,7 +71,7 @@ HTML、内容采集逻辑或视觉样式。
 - Publish directory: `outputs`
 - Build command: `python3 scripts/generate_daily_report.py`
 
-旧的 Netlify 配置暂时保留作为迁移回退，不影响 Codex Sites 发布。
+旧的 Netlify 配置暂时保留作为迁移回退，不影响 GitHub Pages 发布。
 
 原 Netlify 流程：
 
