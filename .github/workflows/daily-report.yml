@@ -77,13 +77,13 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Send QQ notification
-        if: ${{ secrets.QQ_SMTP_USER != '' && secrets.QQ_SMTP_AUTH_CODE != '' }}
         env:
           PAGES_URL: ${{ needs.deploy-pages.outputs.page_url }}
           QQ_SMTP_USER: ${{ secrets.QQ_SMTP_USER }}
           QQ_SMTP_AUTH_CODE: ${{ secrets.QQ_SMTP_AUTH_CODE }}
-        run: python scripts/send_qq_pages_notification.py
-
-      - name: Explain missing QQ SMTP secrets
-        if: ${{ secrets.QQ_SMTP_USER == '' || secrets.QQ_SMTP_AUTH_CODE == '' }}
-        run: echo "GitHub Pages deployed; QQ notification is waiting for repository secrets."
+        run: |
+          if [ -z "$QQ_SMTP_USER" ] || [ -z "$QQ_SMTP_AUTH_CODE" ]; then
+            echo "GitHub Pages deployed; QQ notification is waiting for repository secrets."
+            exit 0
+          fi
+          python scripts/send_qq_pages_notification.py
